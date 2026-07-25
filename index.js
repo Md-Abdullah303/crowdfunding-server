@@ -215,6 +215,25 @@ const deleteUser = async (req, res, next) => {
   }
 };
 
+// Update current user profile
+const updateProfile = async (req, res, next) => {
+  try {
+    const { name, image } = req.body;
+    const userId = req.user.id;
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    if (name) user.name = name;
+    if (image) user.image = image;
+
+    await user.save();
+    res.status(200).json({ success: true, message: "Profile updated successfully", data: user });
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 // ==========================================
 // 5. Express App Setup & Server Start
@@ -261,6 +280,7 @@ app.get("/", (req, res) => {
 
 // User Management Routes
 app.get("/api/users", ...isAdmin, getAllUsers);
+app.patch("/api/users/me", isAuthenticated, updateProfile);
 app.patch("/api/users/:id/role", ...isAdmin, updateUserRole);
 app.delete("/api/users/:id", ...isAdmin, deleteUser);
 
