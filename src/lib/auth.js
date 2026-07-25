@@ -23,6 +23,7 @@ export const getAuth = () => {
 
   _auth = betterAuth({
     baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
+    trustedOrigins: [process.env.CLIENT_URL || "http://localhost:3000"],
     secret: process.env.BETTER_AUTH_SECRET,
     basePath: "/api/auth",
 
