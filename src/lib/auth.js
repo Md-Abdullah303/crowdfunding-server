@@ -48,6 +48,7 @@ export const getAuth = () => {
 
     // Additional fields stored in the user collection
     user: {
+      modelName: "users",
       additionalFields: {
         role: {
           type: "string",
@@ -65,6 +66,12 @@ export const getAuth = () => {
           input: false,
         },
       },
+    },
+    session: {
+      modelName: "sessions",
+    },
+    account: {
+      modelName: "accounts",
     },
 
     // Database hooks: grant registration bonus on user creation

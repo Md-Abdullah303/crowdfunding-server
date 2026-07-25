@@ -33,7 +33,10 @@ await connectDB();
 
 // ─── Better-Auth Handler ──────────────────────────────────────────────────────
 // Mounted AFTER connectDB (so mongoose is ready) and BEFORE express.json()
-app.all("/api/auth/{*any}", toNodeHandler(getAuth()));
+app.use("/api/auth", (req, res) => {
+  req.url = req.originalUrl; // better-auth expects the full URL including /api/auth
+  toNodeHandler(getAuth())(req, res);
+});
 
 // ─── Body Parsers (after better-auth) ────────────────────────────────────────
 app.use(express.json());
