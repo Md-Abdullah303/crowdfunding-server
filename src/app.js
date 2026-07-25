@@ -10,7 +10,7 @@ import { getAuth } from "./lib/auth.js";
 
 // Route imports (uncommented as they are built)
 // import authRoutes from "./routes/auth.routes.js";
-// import userRoutes from "./routes/user.routes.js";
+import userRoutes from "./routes/user.routes.js";
 // import campaignRoutes from "./routes/campaign.routes.js";
 // import contributionRoutes from "./routes/contribution.routes.js";
 // import withdrawalRoutes from "./routes/withdrawal.routes.js";
@@ -51,7 +51,7 @@ app.get("/", (req, res) => {
 });
 
 // app.use("/api/auth/user", authRoutes);
-// app.use("/api/users", userRoutes);
+app.use("/api/users", userRoutes);
 // app.use("/api/campaigns", campaignRoutes);
 // app.use("/api/contributions", contributionRoutes);
 // app.use("/api/withdrawals", withdrawalRoutes);
