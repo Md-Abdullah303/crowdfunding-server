@@ -1,37 +1,71 @@
+import { getAuth } from "../lib/auth.js";
+
 /**
- * Middleware to verify JWT token and attach user to request.
- * To be implemented fully in Step 2 (Authentication setup).
+ * Verifies the Bearer token / session and attaches `req.user` to the request.
+ * Must be used before any role-checking middleware.
  */
-const verifyToken = async (req, res, next) => {
+export const requireAuth = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ success: false, message: "Unauthorized: No token provided" });
+    const session = await getAuth().api.getSession({
+      headers: req.headers,
+    });
+
+    if (!session || !session.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized: Please login to access this resource.",
+      });
     }
-    // JWT verification logic will be added after better-auth setup
+
+    req.user = session.user;
+    req.session = session.session;
     next();
   } catch (error) {
-    return res.status(401).json({ success: false, message: "Unauthorized: Invalid token" });
+    console.error("❌ Auth middleware error:", error.message);
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized: Invalid or expired session.",
+    });
   }
 };
 
 /**
- * Factory to create a role-checking middleware.
- * Usage: requireRole("admin"), requireRole("creator"), requireRole("supporter")
+ * Factory: creates a middleware that allows only specified roles.
+ * Usage: requireRole("admin"), requireRole("creator", "admin")
  */
-const requireRole = (...roles) => {
+export const requireRole = (...allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ success: false, message: "Unauthorized" });
-    }
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({
+      return res.status(401).json({
         success: false,
-        message: `Forbidden: Requires role(s): ${roles.join(", ")}`,
+        message: "Unauthorized: Not authenticated.",
       });
     }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: `Forbidden: This resource requires role: ${allowedRoles.join(" or ")}.`,
+      });
+    }
+
     next();
   };
 };
 
-module.exports = { verifyToken, requireRole };
+// ─── Shorthand Role Middlewares ────────────────────────────────────────────────
+
+/** Requires user to be authenticated (any role) */
+export const isAuthenticated = requireAuth;
+
+/** Requires user to be an Admin */
+export const isAdmin = [requireAuth, requireRole("admin")];
+
+/** Requires user to be a Creator */
+export const isCreator = [requireAuth, requireRole("creator")];
+
+/** Requires user to be a Supporter */
+export const isSupporter = [requireAuth, requireRole("supporter")];
+
+/** Allows Admin or Creator */
+export const isAdminOrCreator = [requireAuth, requireRole("admin", "creator")];

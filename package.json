@@ -16,7 +16,7 @@
   ],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
     "better-auth": "^1.6.23",
     "cors": "^2.8.6",
