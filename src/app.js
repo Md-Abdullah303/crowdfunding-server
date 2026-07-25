@@ -1,4 +1,5 @@
 import express from "express";
+// Trigger nodemon restart to pick up .env changes
 import cors from "cors";
 import "dotenv/config";
 import { toNodeHandler } from "better-auth/node";
@@ -33,10 +34,7 @@ await connectDB();
 
 // ─── Better-Auth Handler ──────────────────────────────────────────────────────
 // Mounted AFTER connectDB (so mongoose is ready) and BEFORE express.json()
-app.use("/api/auth", (req, res) => {
-  req.url = req.originalUrl; // better-auth expects the full URL including /api/auth
-  toNodeHandler(getAuth())(req, res);
-});
+app.all(["/api/auth", "/api/auth/*path"], toNodeHandler(getAuth()));
 
 // ─── Body Parsers (after better-auth) ────────────────────────────────────────
 app.use(express.json());
