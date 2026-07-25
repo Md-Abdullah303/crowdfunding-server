@@ -176,7 +176,71 @@ const isAdmin = [requireAuth, requireRole("admin")];
 // 4. API Controllers
 // ==========================================
 
-// Get all users (Admin only)
+// --- Campaign Controllers ---
+
+// @desc    Create a new campaign
+// @route   POST /api/campaigns
+// @access  Private/Creator
+const createCampaign = async (req, res, next) => {
+  try {
+    const { title, description, category, goalAmount, deadline, coverImage } = req.body;
+    
+    const newCampaign = await Campaign.create({
+      title,
+      description,
+      category,
+      goalAmount,
+      deadline,
+      coverImage,
+      creator: req.user.id,
+      status: "pending", // Default status, needs admin approval
+    });
+
+    res.status(201).json({ success: true, message: "Campaign created successfully. Waiting for admin approval.", data: newCampaign });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get creator's own campaigns
+// @route   GET /api/campaigns/my-campaigns
+// @access  Private/Creator
+const getMyCampaigns = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || "";
+    
+    // Build query
+    const query = { creator: req.user.id };
+    
+    if (search) {
+      query.title = { $regex: search, $options: "i" }; // Case-insensitive search on title
+    }
+
+    const startIndex = (page - 1) * limit;
+    
+    const campaigns = await Campaign.find(query)
+      .sort({ createdAt: -1 })
+      .skip(startIndex)
+      .limit(limit);
+      
+    const total = await Campaign.countDocuments(query);
+
+    res.status(200).json({
+      success: true,
+      count: campaigns.length,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+      data: campaigns,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// --- User Controllers ---
 const getAllUsers = async (req, res, next) => {
   try {
     const users = await User.find({}).select("-password").sort({ createdAt: -1 });
@@ -277,6 +341,10 @@ app.get("/", (req, res) => {
 });
 
 // --- API Routes ---
+
+// Campaign Routes
+app.post("/api/campaigns", ...isCreator, createCampaign);
+app.get("/api/campaigns/my-campaigns", ...isCreator, getMyCampaigns);
 
 // User Management Routes
 app.get("/api/users", ...isAdmin, getAllUsers);
