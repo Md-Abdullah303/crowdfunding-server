@@ -170,6 +170,7 @@ const requireRole = (...allowedRoles) => {
 
 const isAuthenticated = requireAuth;
 const isAdmin = [requireAuth, requireRole("admin")];
+const isCreator = [requireAuth, requireRole("creator")];
 
 
 // ==========================================
