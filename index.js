@@ -241,6 +241,21 @@ const getMyCampaigns = async (req, res, next) => {
   }
 };
 
+// @desc    Get all campaigns (Public)
+// @route   GET /api/campaigns
+// @access  Public
+const getAllCampaigns = async (req, res, next) => {
+  try {
+    const campaigns = await Campaign.find()
+      .populate("creator", "name image")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ success: true, count: campaigns.length, data: campaigns });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // --- User Controllers ---
 const getAllUsers = async (req, res, next) => {
   try {
@@ -346,6 +361,7 @@ app.get("/", (req, res) => {
 // Campaign Routes
 app.post("/api/campaigns", ...isCreator, createCampaign);
 app.get("/api/campaigns/my-campaigns", ...isCreator, getMyCampaigns);
+app.get("/api/campaigns", getAllCampaigns);
 
 // User Management Routes
 app.get("/api/users", ...isAdmin, getAllUsers);
