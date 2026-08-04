@@ -256,6 +256,24 @@ const getAllCampaigns = async (req, res, next) => {
   }
 };
 
+// @desc    Get single campaign by ID
+// @route   GET /api/campaigns/:id
+// @access  Public
+const getCampaignById = async (req, res, next) => {
+  try {
+    const campaign = await Campaign.findById(req.params.id)
+      .populate("creator", "name image email");
+
+    if (!campaign) {
+      return res.status(404).json({ success: false, message: "Campaign not found" });
+    }
+
+    res.status(200).json({ success: true, data: campaign });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // --- User Controllers ---
 const getAllUsers = async (req, res, next) => {
   try {
@@ -362,6 +380,7 @@ app.get("/", (req, res) => {
 app.post("/api/campaigns", ...isCreator, createCampaign);
 app.get("/api/campaigns/my-campaigns", ...isCreator, getMyCampaigns);
 app.get("/api/campaigns", getAllCampaigns);
+app.get("/api/campaigns/:id", getCampaignById);
 
 // User Management Routes
 app.get("/api/users", ...isAdmin, getAllUsers);
