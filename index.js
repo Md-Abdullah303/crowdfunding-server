@@ -241,16 +241,78 @@ const getMyCampaigns = async (req, res, next) => {
   }
 };
 
-// @desc    Get all campaigns (Public)
+// @desc    Get all approved campaigns (Public - Explore page)
 // @route   GET /api/campaigns
 // @access  Public
 const getAllCampaigns = async (req, res, next) => {
   try {
-    const campaigns = await Campaign.find()
+    const campaigns = await Campaign.find({ status: "approved" })
       .populate("creator", "name image")
       .sort({ createdAt: -1 });
 
     res.status(200).json({ success: true, count: campaigns.length, data: campaigns });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get ALL campaigns for Admin (all statuses)
+// @route   GET /api/admin/campaigns
+// @access  Private/Admin
+const getAllCampaignsAdmin = async (req, res, next) => {
+  try {
+    const { status } = req.query; // optional filter by status
+    const query = status && status !== "all" ? { status } : {};
+
+    const campaigns = await Campaign.find(query)
+      .populate("creator", "name image email")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ success: true, count: campaigns.length, data: campaigns });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Update campaign status (Approve or Reject)
+// @route   PATCH /api/admin/campaigns/:id/status
+// @access  Private/Admin
+const updateCampaignStatus = async (req, res, next) => {
+  try {
+    const { status, rejectionReason } = req.body;
+    const validStatuses = ["approved", "rejected", "pending"];
+
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid status value" });
+    }
+
+    const campaign = await Campaign.findById(req.params.id).populate("creator", "name");
+    if (!campaign) {
+      return res.status(404).json({ success: false, message: "Campaign not found" });
+    }
+
+    campaign.status = status;
+    if (status === "rejected" && rejectionReason) {
+      campaign.rejectionReason = rejectionReason;
+    }
+    await campaign.save();
+
+    // Create notification for the creator
+    const notifType = status === "approved" ? "campaign_approved" : "campaign_rejected";
+    const notifMessage =
+      status === "approved"
+        ? `Your campaign "${campaign.title}" has been approved and is now live!`
+        : `Your campaign "${campaign.title}" was rejected. ${rejectionReason ? `Reason: ${rejectionReason}` : ""}`;
+
+    await Notification.create({
+      recipient: campaign.creator._id,
+      type: notifType,
+      message: notifMessage,
+      refModel: "Campaign",
+      refId: campaign._id,
+    });
+
+    res.status(200).json({ success: true, message: `Campaign ${status} successfully`, data: campaign });
   } catch (error) {
     next(error);
   }
@@ -376,20 +438,21 @@ app.get("/", (req, res) => {
 
 // --- API Routes ---
 
-// Campaign Routes
+// Campaign Routes (Public & Creator)
 app.post("/api/campaigns", ...isCreator, createCampaign);
 app.get("/api/campaigns/my-campaigns", ...isCreator, getMyCampaigns);
 app.get("/api/campaigns", getAllCampaigns);
 app.get("/api/campaigns/:id", getCampaignById);
+
+// Admin Campaign Management Routes
+app.get("/api/admin/campaigns", ...isAdmin, getAllCampaignsAdmin);
+app.patch("/api/admin/campaigns/:id/status", ...isAdmin, updateCampaignStatus);
 
 // User Management Routes
 app.get("/api/users", ...isAdmin, getAllUsers);
 app.patch("/api/users/me", isAuthenticated, updateProfile);
 app.patch("/api/users/:id/role", ...isAdmin, updateUserRole);
 app.delete("/api/users/:id", ...isAdmin, deleteUser);
-
-// Placeholder for other routes (Campaigns, Contributions, etc.)
-// app.get("/api/campaigns", ...);
 
 
 // 404 Handler
