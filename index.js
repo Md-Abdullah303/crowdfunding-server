@@ -6,6 +6,7 @@ import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { bearer } from "better-auth/plugins";
 import { toNodeHandler, fromNodeHeaders } from "better-auth/node";
+import Stripe from "stripe";
 
 // ==========================================
 // 1. Mongoose Models
@@ -91,6 +92,20 @@ withdrawalSchema.pre("save", function (next) {
   next();
 });
 const Withdrawal = mongoose.model("Withdrawal", withdrawalSchema);
+
+// CreditPurchase Model
+const creditPurchaseSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "user", required: true },
+    credits: { type: Number, required: true },
+    amountUSD: { type: Number, required: true },
+    stripeSessionId: { type: String, required: true, unique: true },
+    status: { type: String, enum: ["completed", "failed"], default: "completed" },
+  },
+  { timestamps: true }
+);
+const CreditPurchase = mongoose.model("CreditPurchase", creditPurchaseSchema);
+
 
 
 // ==========================================
@@ -396,6 +411,415 @@ const updateProfile = async (req, res, next) => {
 
 
 // ==========================================
+// 4b. Contribution Controllers
+// ==========================================
+
+// @desc    Supporter contributes credits to a campaign
+// @route   POST /api/contributions
+// @access  Private/Supporter
+const createContribution = async (req, res, next) => {
+  try {
+    const { campaignId, amount, message } = req.body;
+    const supporterId = req.user.id;
+
+    if (!amount || amount < 1) {
+      return res.status(400).json({ success: false, message: "Minimum contribution is 1 credit" });
+    }
+
+    const campaign = await Campaign.findById(campaignId);
+    if (!campaign) return res.status(404).json({ success: false, message: "Campaign not found" });
+    if (campaign.status !== "approved") return res.status(400).json({ success: false, message: "This campaign is not accepting contributions" });
+
+    const supporter = await User.findById(supporterId);
+    if (!supporter) return res.status(404).json({ success: false, message: "User not found" });
+    if (supporter.credits < amount) return res.status(400).json({ success: false, message: `Insufficient credits. You have ${supporter.credits} but tried to contribute ${amount}.` });
+
+    // Deduct credits from supporter immediately (held in escrow)
+    supporter.credits -= amount;
+    await supporter.save();
+
+    const contribution = await Contribution.create({
+      campaign: campaignId,
+      supporter: supporterId,
+      amount,
+      message: message || null,
+      status: "pending",
+    });
+
+    // Notify the campaign creator
+    await Notification.create({
+      recipient: campaign.creator,
+      type: "contribution_received",
+      message: `${supporter.name} contributed ${amount} credits to your campaign "${campaign.title}".`,
+      refModel: "Contribution",
+      refId: contribution._id,
+    });
+
+    res.status(201).json({ success: true, message: "Contribution submitted successfully!", data: contribution });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get supporter's own contributions (paginated)
+// @route   GET /api/contributions/my-contributions
+// @access  Private/Supporter
+const getMyContributions = async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const query = { supporter: req.user.id };
+    const total = await Contribution.countDocuments(query);
+    const contributions = await Contribution.find(query)
+      .populate("campaign", "title coverImage category")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    res.status(200).json({
+      success: true, count: contributions.length, total,
+      page, totalPages: Math.ceil(total / limit),
+      data: contributions,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get all contributions for creator's campaigns (pending)
+// @route   GET /api/creator/contributions
+// @access  Private/Creator
+const getCreatorContributions = async (req, res, next) => {
+  try {
+    const { status } = req.query;
+    // Find all campaigns by this creator
+    const myCampaigns = await Campaign.find({ creator: req.user.id }).select("_id");
+    const campaignIds = myCampaigns.map(c => c._id);
+
+    const query = { campaign: { $in: campaignIds } };
+    if (status && status !== "all") query.status = status;
+
+    const contributions = await Contribution.find(query)
+      .populate("supporter", "name image email")
+      .populate("campaign", "title coverImage")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ success: true, count: contributions.length, data: contributions });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Creator approves or rejects a contribution
+// @route   PATCH /api/creator/contributions/:id/status
+// @access  Private/Creator
+const updateContributionStatus = async (req, res, next) => {
+  try {
+    const { status } = req.body;
+    if (!["approved", "rejected"].includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid status" });
+    }
+
+    const contribution = await Contribution.findById(req.params.id)
+      .populate("campaign", "title creator")
+      .populate("supporter", "name");
+
+    if (!contribution) return res.status(404).json({ success: false, message: "Contribution not found" });
+    if (contribution.campaign.creator.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: "You are not the creator of this campaign" });
+    }
+    if (contribution.status !== "pending") {
+      return res.status(400).json({ success: false, message: "This contribution has already been processed" });
+    }
+
+    if (status === "approved") {
+      // Add credits to campaign's raisedAmount
+      await Campaign.findByIdAndUpdate(contribution.campaign._id, { $inc: { raisedAmount: contribution.amount } });
+      contribution.status = "approved";
+    } else {
+      // Refund credits back to supporter
+      await User.findByIdAndUpdate(contribution.supporter._id, { $inc: { credits: contribution.amount } });
+      contribution.status = "rejected";
+    }
+    await contribution.save();
+
+    // Notify the supporter
+    const notifType = status === "approved" ? "contribution_approved" : "contribution_rejected";
+    const notifMsg = status === "approved"
+      ? `Your ${contribution.amount}-credit contribution to "${contribution.campaign.title}" was approved!`
+      : `Your ${contribution.amount}-credit contribution to "${contribution.campaign.title}" was rejected and refunded.`;
+
+    await Notification.create({
+      recipient: contribution.supporter._id,
+      type: notifType,
+      message: notifMsg,
+      refModel: "Contribution",
+      refId: contribution._id,
+    });
+
+    res.status(200).json({ success: true, message: `Contribution ${status} successfully`, data: contribution });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+// ==========================================
+// 4c. Stripe Controllers
+// ==========================================
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+const CREDIT_PACKAGES = [
+  { id: "pkg_100", credits: 100, price: 500,  label: "Starter Pack",   description: "100 Credits for $5" },
+  { id: "pkg_300", credits: 300, price: 1200, label: "Growth Pack",    description: "300 Credits for $12" },
+  { id: "pkg_500", credits: 500, price: 2000, label: "Pro Pack",       description: "500 Credits for $20" },
+  { id: "pkg_1000",credits: 1000,price: 3500, label: "Unlimited Pack", description: "1000 Credits for $35" },
+];
+
+// @desc    Get available credit packages
+// @route   GET /api/stripe/packages
+// @access  Public
+const getCreditPackages = async (req, res) => {
+  res.status(200).json({ success: true, data: CREDIT_PACKAGES });
+};
+
+// @desc    Create a Stripe checkout session
+// @route   POST /api/stripe/create-checkout-session
+// @access  Private
+const createCheckoutSession = async (req, res, next) => {
+  try {
+    const { packageId } = req.body;
+    const pkg = CREDIT_PACKAGES.find(p => p.id === packageId);
+    if (!pkg) return res.status(400).json({ success: false, message: "Invalid package" });
+
+    const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          product_data: { name: pkg.label, description: pkg.description },
+          unit_amount: pkg.price,
+        },
+        quantity: 1,
+      }],
+      mode: "payment",
+      success_url: `${clientUrl}/dashboard/supporter/wallet/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${clientUrl}/dashboard/supporter/wallet`,
+      metadata: {
+        userId: req.user.id,
+        credits: pkg.credits.toString(),
+        packageId: pkg.id,
+      },
+    });
+
+    res.status(200).json({ success: true, url: session.url });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Verify payment and add credits after success
+// @route   GET /api/stripe/verify-payment?session_id=xxx
+// @access  Private
+const verifyPayment = async (req, res, next) => {
+  try {
+    const { session_id } = req.query;
+    if (!session_id) return res.status(400).json({ success: false, message: "Missing session_id" });
+
+    const session = await stripe.checkout.sessions.retrieve(session_id);
+    if (session.payment_status !== "paid") {
+      return res.status(400).json({ success: false, message: "Payment not completed" });
+    }
+
+    // Prevent double crediting: check if already processed
+    const { userId, credits } = session.metadata;
+    const alreadyProcessed = await CreditPurchase.findOne({ stripeSessionId: session_id });
+    if (alreadyProcessed) {
+      return res.status(200).json({ success: true, message: "Already processed", data: alreadyProcessed });
+    }
+
+    const creditsToAdd = parseInt(credits);
+    const user = await User.findByIdAndUpdate(userId, { $inc: { credits: creditsToAdd } }, { new: true });
+
+    const purchase = await CreditPurchase.create({
+      user: userId,
+      credits: creditsToAdd,
+      amountUSD: session.amount_total / 100,
+      stripeSessionId: session_id,
+      status: "completed",
+    });
+
+    res.status(200).json({ success: true, message: `${creditsToAdd} credits added!`, data: purchase });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get supporter's credit purchase history
+// @route   GET /api/stripe/payment-history
+// @access  Private
+const getPaymentHistory = async (req, res, next) => {
+  try {
+    const history = await CreditPurchase.find({ user: req.user.id }).sort({ createdAt: -1 });
+    res.status(200).json({ success: true, count: history.length, data: history });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+// ==========================================
+// 4d. Withdrawal Controllers
+// ==========================================
+
+// @desc    Creator requests a withdrawal
+// @route   POST /api/withdrawals
+// @access  Private/Creator
+const createWithdrawal = async (req, res, next) => {
+  try {
+    const { amountCredits, paymentMethod, note } = req.body;
+    const creatorId = req.user.id;
+
+    if (!amountCredits || amountCredits < 200) {
+      return res.status(400).json({ success: false, message: "Minimum withdrawal is 200 credits ($10)" });
+    }
+
+    const creator = await User.findById(creatorId);
+    if (!creator) return res.status(404).json({ success: false, message: "User not found" });
+
+    // Check available balance from approved contributions
+    const approvedContribs = await Contribution.aggregate([
+      { $match: { status: "approved" } },
+      { $lookup: { from: "campaigns", localField: "campaign", foreignField: "_id", as: "campaignData" } },
+      { $unwind: "$campaignData" },
+      { $match: { "campaignData.creator": new mongoose.Types.ObjectId(creatorId) } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]);
+    const totalEarned = approvedContribs[0]?.total || 0;
+
+    // Subtract already withdrawn
+    const withdrawals = await Withdrawal.aggregate([
+      { $match: { creator: new mongoose.Types.ObjectId(creatorId), status: { $in: ["pending", "approved"] } } },
+      { $group: { _id: null, total: { $sum: "$amountCredits" } } },
+    ]);
+    const totalWithdrawn = withdrawals[0]?.total || 0;
+    const available = totalEarned - totalWithdrawn;
+
+    if (amountCredits > available) {
+      return res.status(400).json({ success: false, message: `Insufficient balance. Available: ${available} credits.` });
+    }
+
+    const withdrawal = await Withdrawal.create({
+      creator: creatorId,
+      amountCredits,
+      paymentMethod,
+      note,
+    });
+
+    res.status(201).json({ success: true, message: "Withdrawal request submitted", data: withdrawal });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Creator's withdrawal history
+// @route   GET /api/creator/withdrawals
+// @access  Private/Creator
+const getCreatorWithdrawals = async (req, res, next) => {
+  try {
+    const withdrawals = await Withdrawal.find({ creator: req.user.id }).sort({ createdAt: -1 });
+    res.status(200).json({ success: true, count: withdrawals.length, data: withdrawals });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Admin gets all withdrawal requests
+// @route   GET /api/admin/withdrawals
+// @access  Private/Admin
+const getAdminWithdrawals = async (req, res, next) => {
+  try {
+    const { status } = req.query;
+    const query = status && status !== "all" ? { status } : {};
+    const withdrawals = await Withdrawal.find(query)
+      .populate("creator", "name image email")
+      .sort({ createdAt: -1 });
+    res.status(200).json({ success: true, count: withdrawals.length, data: withdrawals });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Admin approves or rejects a withdrawal
+// @route   PATCH /api/admin/withdrawals/:id/status
+// @access  Private/Admin
+const updateWithdrawalStatus = async (req, res, next) => {
+  try {
+    const { status } = req.body;
+    if (!["approved", "rejected"].includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid status" });
+    }
+
+    const withdrawal = await Withdrawal.findById(req.params.id).populate("creator", "name");
+    if (!withdrawal) return res.status(404).json({ success: false, message: "Withdrawal not found" });
+    if (withdrawal.status !== "pending") {
+      return res.status(400).json({ success: false, message: "This withdrawal has already been processed" });
+    }
+
+    withdrawal.status = status;
+    await withdrawal.save();
+
+    // Notify creator
+    const notifMsg = status === "approved"
+      ? `Your withdrawal of ${withdrawal.amountCredits} credits ($${withdrawal.amountUSD}) has been approved!`
+      : `Your withdrawal request of ${withdrawal.amountCredits} credits was rejected.`;
+
+    await Notification.create({
+      recipient: withdrawal.creator._id,
+      type: "withdrawal_approved",
+      message: notifMsg,
+      refModel: "Withdrawal",
+      refId: withdrawal._id,
+    });
+
+    res.status(200).json({ success: true, message: `Withdrawal ${status}`, data: withdrawal });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Get creator's available balance
+// @route   GET /api/creator/balance
+// @access  Private/Creator
+const getCreatorBalance = async (req, res, next) => {
+  try {
+    const creatorId = req.user.id;
+    const approvedContribs = await Contribution.aggregate([
+      { $match: { status: "approved" } },
+      { $lookup: { from: "campaigns", localField: "campaign", foreignField: "_id", as: "campaignData" } },
+      { $unwind: "$campaignData" },
+      { $match: { "campaignData.creator": new mongoose.Types.ObjectId(creatorId) } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]);
+    const totalEarned = approvedContribs[0]?.total || 0;
+    const withdrawals = await Withdrawal.aggregate([
+      { $match: { creator: new mongoose.Types.ObjectId(creatorId), status: { $in: ["pending", "approved"] } } },
+      { $group: { _id: null, total: { $sum: "$amountCredits" } } },
+    ]);
+    const totalWithdrawn = withdrawals[0]?.total || 0;
+    res.status(200).json({ success: true, data: { totalEarned, totalWithdrawn, available: totalEarned - totalWithdrawn } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+// ==========================================
 // 5. Express App Setup & Server Start
 // ==========================================
 
@@ -417,7 +841,7 @@ mongoose.connect(process.env.MONGODB_URI)
     process.exit(1);
   });
 
-// Better-Auth handler (mounted after DB connection is initiated, getAuth handles lazy init)
+// Better-Auth handler
 app.all(["/api/auth", "/api/auth/*path"], (req, res, next) => {
   toNodeHandler(getAuth())(req, res, next);
 });
@@ -453,6 +877,25 @@ app.get("/api/users", ...isAdmin, getAllUsers);
 app.patch("/api/users/me", isAuthenticated, updateProfile);
 app.patch("/api/users/:id/role", ...isAdmin, updateUserRole);
 app.delete("/api/users/:id", ...isAdmin, deleteUser);
+
+// Contribution Routes
+app.post("/api/contributions", ...isAuthenticated, createContribution);
+app.get("/api/contributions/my-contributions", isAuthenticated, getMyContributions);
+app.get("/api/creator/contributions", ...isCreator, getCreatorContributions);
+app.patch("/api/creator/contributions/:id/status", ...isCreator, updateContributionStatus);
+
+// Stripe Routes
+app.get("/api/stripe/packages", getCreditPackages);
+app.post("/api/stripe/create-checkout-session", isAuthenticated, createCheckoutSession);
+app.get("/api/stripe/verify-payment", isAuthenticated, verifyPayment);
+app.get("/api/stripe/payment-history", isAuthenticated, getPaymentHistory);
+
+// Withdrawal Routes
+app.post("/api/withdrawals", ...isCreator, createWithdrawal);
+app.get("/api/creator/withdrawals", ...isCreator, getCreatorWithdrawals);
+app.get("/api/creator/balance", ...isCreator, getCreatorBalance);
+app.get("/api/admin/withdrawals", ...isAdmin, getAdminWithdrawals);
+app.patch("/api/admin/withdrawals/:id/status", ...isAdmin, updateWithdrawalStatus);
 
 
 // 404 Handler
