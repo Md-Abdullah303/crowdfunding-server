@@ -872,8 +872,20 @@ app.get("/api/campaigns/:id", getCampaignById);
 app.get("/api/admin/campaigns", ...isAdmin, getAllCampaignsAdmin);
 app.patch("/api/admin/campaigns/:id/status", ...isAdmin, updateCampaignStatus);
 
+// Get current user's fresh data (bypasses session cache)
+const getMe = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id).select("-password");
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    res.status(200).json({ success: true, data: user });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // User Management Routes
 app.get("/api/users", ...isAdmin, getAllUsers);
+app.get("/api/users/me", isAuthenticated, getMe);
 app.patch("/api/users/me", isAuthenticated, updateProfile);
 app.patch("/api/users/:id/role", ...isAdmin, updateUserRole);
 app.delete("/api/users/:id", ...isAdmin, deleteUser);
