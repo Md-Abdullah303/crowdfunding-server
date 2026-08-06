@@ -879,7 +879,7 @@ app.patch("/api/users/:id/role", ...isAdmin, updateUserRole);
 app.delete("/api/users/:id", ...isAdmin, deleteUser);
 
 // Contribution Routes
-app.post("/api/contributions", ...isAuthenticated, createContribution);
+app.post("/api/contributions", isAuthenticated, createContribution);
 app.get("/api/contributions/my-contributions", isAuthenticated, getMyContributions);
 app.get("/api/creator/contributions", ...isCreator, getCreatorContributions);
 app.patch("/api/creator/contributions/:id/status", ...isCreator, updateContributionStatus);
