@@ -721,8 +721,8 @@ const createWithdrawal = async (req, res, next) => {
     const { amountCredits, paymentMethod, note } = req.body;
     const creatorId = req.user.id;
 
-    if (!amountCredits || amountCredits < 200) {
-      return res.status(400).json({ success: false, message: "Minimum withdrawal is 200 credits ($10)" });
+    if (!amountCredits || amountCredits < 100) {
+      return res.status(400).json({ success: false, message: "Minimum withdrawal is 100 credits ($5)" });
     }
 
     const creator = await User.findById(creatorId);
