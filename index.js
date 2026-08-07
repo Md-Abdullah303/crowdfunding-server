@@ -682,6 +682,37 @@ const getPaymentHistory = async (req, res, next) => {
 // 4d. Withdrawal Controllers
 // ==========================================
 
+// @desc    Get creator's balance summary
+// @route   GET /api/creator/balance
+// @access  Private/Creator
+const getCreatorBalance = async (req, res, next) => {
+  try {
+    const creatorId = req.user.id;
+
+    // Get all approved contributions for creator's campaigns
+    const approvedContribs = await Contribution.aggregate([
+      { $match: { status: { $in: ["approved", "pending"] } } },
+      { $lookup: { from: "campaigns", localField: "campaign", foreignField: "_id", as: "campaignData" } },
+      { $unwind: "$campaignData" },
+      { $match: { "campaignData.creator": new mongoose.Types.ObjectId(creatorId) } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]);
+    const totalEarned = approvedContribs[0]?.total || 0;
+
+    // Get withdrawn amounts (pending or approved)
+    const withdrawnAgg = await Withdrawal.aggregate([
+      { $match: { creator: new mongoose.Types.ObjectId(creatorId), status: { $in: ["pending", "approved"] } } },
+      { $group: { _id: null, total: { $sum: "$amountCredits" } } },
+    ]);
+    const totalWithdrawn = withdrawnAgg[0]?.total || 0;
+    const available = totalEarned - totalWithdrawn;
+
+    res.status(200).json({ success: true, data: { totalEarned, totalWithdrawn, available } });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc    Creator requests a withdrawal
 // @route   POST /api/withdrawals
 // @access  Private/Creator
