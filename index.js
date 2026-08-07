@@ -79,7 +79,7 @@ const CREDITS_PER_DOLLAR = 20;
 const withdrawalSchema = new mongoose.Schema(
   {
     creator: { type: mongoose.Schema.Types.ObjectId, ref: "user", required: true },
-    amountCredits: { type: Number, required: [true, "Withdrawal amount is required"], min: 200 },
+    amountCredits: { type: Number, required: [true, "Withdrawal amount is required"], min: 1 },
     amountUSD: { type: Number },
     status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
     paymentMethod: { type: String, default: null },
