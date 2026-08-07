@@ -128,9 +128,13 @@ const getAuth = () => {
   if (_auth) return _auth;
   const db = mongoose.connection.getClient().db();
 
+  const isDev = process.env.NODE_ENV !== "production";
+  const authUrlFallback = isDev ? "http://localhost:5000" : "https://crowdfunding-server-navy.vercel.app";
+  const clientUrlFallback = isDev ? "http://localhost:3000" : "https://crowdfunding-client-lac.vercel.app";
+
   _auth = betterAuth({
-    baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
-    trustedOrigins: [process.env.CLIENT_URL || "http://localhost:3000"],
+    baseURL: process.env.BETTER_AUTH_URL || authUrlFallback,
+    trustedOrigins: [process.env.CLIENT_URL || clientUrlFallback, "http://localhost:3000"],
     secret: process.env.BETTER_AUTH_SECRET,
     basePath: "/api/auth",
     database: mongodbAdapter(db),
