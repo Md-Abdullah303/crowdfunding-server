@@ -831,6 +831,77 @@ const updateWithdrawalStatus = async (req, res, next) => {
 
 
 // ==========================================
+// 4e. Notification Controllers
+// ==========================================
+const getMyNotifications = async (req, res, next) => {
+  try {
+    const notifications = await Notification.find({ recipient: req.user.id })
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.status(200).json({ success: true, count: notifications.length, data: notifications });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const markNotificationRead = async (req, res, next) => {
+  try {
+    const notif = await Notification.findOneAndUpdate(
+      { _id: req.params.id, recipient: req.user.id },
+      { isRead: true },
+      { new: true }
+    );
+    if (!notif) return res.status(404).json({ success: false, message: "Notification not found" });
+    res.status(200).json({ success: true, data: notif });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const markAllNotificationsRead = async (req, res, next) => {
+  try {
+    await Notification.updateMany({ recipient: req.user.id, isRead: false }, { isRead: true });
+    res.status(200).json({ success: true, message: "All notifications marked as read" });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ==========================================
+// 4f. Admin Dashboard Stats Controller
+// ==========================================
+const getAdminStats = async (req, res, next) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const totalCampaigns = await Campaign.countDocuments();
+    
+    const purchasesAgg = await mongoose.model("CreditPurchase").aggregate([
+      { $match: { status: "completed" } },
+      { $group: { _id: null, total: { $sum: "$amountUSD" } } }
+    ]);
+    const totalRevenue = purchasesAgg[0]?.total || 0;
+    
+    const contribsAgg = await Contribution.aggregate([
+      { $match: { status: "approved" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } }
+    ]);
+    const totalContributions = contribsAgg[0]?.total || 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        totalUsers,
+        totalCampaigns,
+        totalRevenue,
+        totalContributions
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ==========================================
 // 5. Express App Setup & Server Start
 // ==========================================
 
@@ -919,6 +990,13 @@ app.get("/api/creator/withdrawals", ...isCreator, getCreatorWithdrawals);
 app.get("/api/creator/balance", ...isCreator, getCreatorBalance);
 app.get("/api/admin/withdrawals", ...isAdmin, getAdminWithdrawals);
 app.patch("/api/admin/withdrawals/:id/status", ...isAdmin, updateWithdrawalStatus);
+// Notification Routes
+app.get("/api/notifications", isAuthenticated, getMyNotifications);
+app.patch("/api/notifications/:id/read", isAuthenticated, markNotificationRead);
+app.patch("/api/notifications/read-all", isAuthenticated, markAllNotificationsRead);
+
+// Admin Stats Route
+app.get("/api/admin/stats", ...isAdmin, getAdminStats);
 
 
 // 404 Handler
