@@ -106,7 +106,17 @@ const creditPurchaseSchema = new mongoose.Schema(
 );
 const CreditPurchase = mongoose.model("CreditPurchase", creditPurchaseSchema);
 
-
+// Report Model
+const reportSchema = new mongoose.Schema(
+  {
+    reporter: { type: mongoose.Schema.Types.ObjectId, ref: "user", required: true },
+    campaign: { type: mongoose.Schema.Types.ObjectId, ref: "Campaign", required: true },
+    reason: { type: String, required: [true, "Reason for reporting is required"], maxlength: 500 },
+    status: { type: String, enum: ["pending", "dismissed", "action_taken"], default: "pending" },
+  },
+  { timestamps: true }
+);
+const Report = mongoose.model("Report", reportSchema);
 
 // ==========================================
 // 2. Better-Auth Configuration
@@ -901,6 +911,37 @@ const getAdminStats = async (req, res, next) => {
   }
 };
 
+// @desc    Submit a campaign report
+// @route   POST /api/reports
+// @access  Private/Supporter (or any authenticated user)
+const createReport = async (req, res, next) => {
+  try {
+    const { campaignId, reason } = req.body;
+    if (!campaignId || !reason) {
+      return res.status(400).json({ success: false, message: "Campaign ID and reason are required" });
+    }
+    
+    // Check if already reported by this user
+    const existing = await Report.findOne({ reporter: req.user.id, campaign: campaignId });
+    if (existing) {
+      return res.status(400).json({ success: false, message: "You have already reported this campaign" });
+    }
+
+    const report = await Report.create({
+      reporter: req.user.id,
+      campaign: campaignId,
+      reason,
+    });
+
+    // Mark campaign as reported
+    await Campaign.findByIdAndUpdate(campaignId, { isReported: true });
+
+    res.status(201).json({ success: true, message: "Report submitted successfully", data: report });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ==========================================
 // 5. Express App Setup & Server Start
 // ==========================================
@@ -994,6 +1035,9 @@ app.patch("/api/admin/withdrawals/:id/status", ...isAdmin, updateWithdrawalStatu
 app.get("/api/notifications", isAuthenticated, getMyNotifications);
 app.patch("/api/notifications/:id/read", isAuthenticated, markNotificationRead);
 app.patch("/api/notifications/read-all", isAuthenticated, markAllNotificationsRead);
+
+// Report Routes
+app.post("/api/reports", isAuthenticated, createReport);
 
 // Admin Stats Route
 app.get("/api/admin/stats", ...isAdmin, getAdminStats);
