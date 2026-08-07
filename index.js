@@ -438,6 +438,10 @@ const createContribution = async (req, res, next) => {
     supporter.credits -= amount;
     await supporter.save();
 
+    // Optimistically add to campaign's raisedAmount so progress shows immediately
+    campaign.raisedAmount += amount;
+    await campaign.save();
+
     const contribution = await Contribution.create({
       campaign: campaignId,
       supporter: supporterId,
@@ -535,12 +539,13 @@ const updateContributionStatus = async (req, res, next) => {
     }
 
     if (status === "approved") {
-      // Add credits to campaign's raisedAmount
-      await Campaign.findByIdAndUpdate(contribution.campaign._id, { $inc: { raisedAmount: contribution.amount } });
+      // Credits were already added to campaign's raisedAmount during creation
       contribution.status = "approved";
     } else {
       // Refund credits back to supporter
       await User.findByIdAndUpdate(contribution.supporter._id, { $inc: { credits: contribution.amount } });
+      // Remove from campaign's raisedAmount since it was rejected
+      await Campaign.findByIdAndUpdate(contribution.campaign._id, { $inc: { raisedAmount: -contribution.amount } });
       contribution.status = "rejected";
     }
     await contribution.save();
