@@ -942,6 +942,71 @@ const createReport = async (req, res, next) => {
   }
 };
 
+// @desc    Get all reports (Admin)
+// @route   GET /api/admin/reports
+// @access  Private/Admin
+const getAdminReports = async (req, res, next) => {
+  try {
+    const reports = await Report.find()
+      .populate("reporter", "name email")
+      .populate("campaign", "title status creator isReported")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ success: true, count: reports.length, data: reports });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Resolve a report (Admin)
+// @route   PATCH /api/admin/reports/:id/action
+// @access  Private/Admin
+const resolveReport = async (req, res, next) => {
+  try {
+    const { action } = req.body; // "dismiss", "suspend", "delete"
+    const reportId = req.params.id;
+
+    const report = await Report.findById(reportId).populate("campaign");
+    if (!report) return res.status(404).json({ success: false, message: "Report not found" });
+
+    if (action === "dismiss") {
+      report.status = "dismissed";
+      // optionally un-flag campaign if there are no other pending reports
+      const pendingReports = await Report.countDocuments({ campaign: report.campaign._id, status: "pending", _id: { $ne: reportId } });
+      if (pendingReports === 0) {
+        await Campaign.findByIdAndUpdate(report.campaign._id, { isReported: false });
+      }
+    } else if (action === "suspend") {
+      report.status = "action_taken";
+      await Campaign.findByIdAndUpdate(report.campaign._id, { status: "rejected", isReported: true });
+      
+      // Notify creator about suspension
+      await Notification.create({
+        recipient: report.campaign.creator,
+        type: "campaign_rejected",
+        message: `Your campaign "${report.campaign.title}" has been suspended due to reports.`,
+        refModel: "Campaign",
+        refId: report.campaign._id
+      });
+    } else if (action === "delete") {
+      report.status = "action_taken";
+      // Actually delete the campaign
+      await Campaign.findByIdAndDelete(report.campaign._id);
+      
+      // Update all reports for this campaign to action_taken
+      await Report.updateMany({ campaign: report.campaign._id }, { status: "action_taken" });
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid action" });
+    }
+
+    await report.save();
+
+    res.status(200).json({ success: true, message: `Report marked as ${action}` });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ==========================================
 // 5. Express App Setup & Server Start
 // ==========================================
@@ -1038,6 +1103,8 @@ app.patch("/api/notifications/read-all", isAuthenticated, markAllNotificationsRe
 
 // Report Routes
 app.post("/api/reports", isAuthenticated, createReport);
+app.get("/api/admin/reports", ...isAdmin, getAdminReports);
+app.patch("/api/admin/reports/:id/action", ...isAdmin, resolveReport);
 
 // Admin Stats Route
 app.get("/api/admin/stats", ...isAdmin, getAdminStats);
